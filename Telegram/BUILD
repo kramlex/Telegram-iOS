@@ -1102,6 +1102,7 @@ ios_framework(
     ipa_post_processor = strip_framework,
     deps = [
         "//submodules/TelegramUI:TelegramUI",
+        "//submodules/ApiFetcher:ApiFetcher",
     ] + debug_deps,
 )
 

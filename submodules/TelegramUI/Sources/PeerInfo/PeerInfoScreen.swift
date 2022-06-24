@@ -69,6 +69,7 @@ import CreateExternalMediaStreamScreen
 import PaymentMethodUI
 import PremiumUI
 import InstantPageCache
+import ApiFetcher
 
 protocol PeerInfoScreenItem: AnyObject {
     var id: AnyHashable { get }
@@ -873,7 +874,7 @@ private func settingsEditingItems(data: PeerInfoScreenData?, state: PeerInfoStat
     return result
 }
 
-private func infoItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, nearbyPeerDistance: Int32?, callMessages: [Message]) -> [(AnyHashable, [PeerInfoScreenItem])] {
+private func infoItems(data: PeerInfoScreenData?, context: AccountContext, presentationData: PresentationData, interaction: PeerInfoInteraction, nearbyPeerDistance: Int32?, callMessages: [Message], timestamp: Int32?) -> [(AnyHashable, [PeerInfoScreenItem])] {
     guard let data = data else {
         return []
     }
@@ -899,7 +900,7 @@ private func infoItems(data: PeerInfoScreenData?, context: AccountContext, prese
     
     if let user = data.peer as? TelegramUser {
         if !callMessages.isEmpty {
-            items[.calls]!.append(PeerInfoScreenCallListItem(id: 20, messages: callMessages))
+            items[.calls]!.append(PeerInfoScreenCallListItem(id: 20, messages: callMessages, loadedTimestamp: timestamp))
         }
         
         if let phone = user.phone {
@@ -1656,6 +1657,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
     private var chatInterfaceInteraction: ChatControllerInteraction {
         return self._chatInterfaceInteraction!
     }
+    fileprivate var timestampLoadDisposable: Disposable?
     private var hiddenMediaDisposable: Disposable?
     private let hiddenAvatarRepresentationDisposable = MetaDisposable()
     
@@ -1674,6 +1676,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
         highlightedButton: nil
     )
     private let nearbyPeerDistance: Int32?
+    private var loadedTimestamp: Int32?
     private var dataDisposable: Disposable?
     
     private let activeActionDisposable = MetaDisposable()
@@ -6484,6 +6487,13 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
         }
     }
     
+    fileprivate func updateTimestamp(_ timestamp: Int32?) {
+        self.loadedTimestamp = timestamp
+        if let (layout, navigationHeight) = self.validLayout {
+            self.containerLayoutUpdated(layout: layout, navigationHeight: navigationHeight, transition: .immediate)
+        }
+    }
+    
     private func updateBio(_ bio: String) {
         self.state = self.state.withUpdatingBio(bio)
         if let (layout, navigationHeight) = self.validLayout {
@@ -7149,7 +7159,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, UIScrollViewDelegate 
             insets.left += sectionInset
             insets.right += sectionInset
             
-            let items = self.isSettings ? settingsItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, isExpanded: self.headerNode.isAvatarExpanded) : infoItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, nearbyPeerDistance: self.nearbyPeerDistance, callMessages: self.callMessages)
+            let items = self.isSettings ? settingsItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, isExpanded: self.headerNode.isAvatarExpanded) : infoItems(data: self.data, context: self.context, presentationData: self.presentationData, interaction: self.interaction, nearbyPeerDistance: self.nearbyPeerDistance, callMessages: self.callMessages, timestamp: self.loadedTimestamp)
             
             contentHeight += headerHeight
             if !(self.isSettings && self.state.isEditing) {
@@ -7768,6 +7778,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen {
     private let isSettings: Bool
     private let hintGroupInCommon: PeerId?
     private weak var requestsContext: PeerInvitationImportersContext?
+    private let fetcher: TimestampApiFetcher
     
     fileprivate var presentationData: PresentationData
     private var presentationDataDisposable: Disposable?
@@ -7813,6 +7824,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen {
         self.isSettings = isSettings
         self.hintGroupInCommon = hintGroupInCommon
         self.requestsContext = requestsContext
+        self.fetcher = TimestampApiFetcher()
         
         self.presentationData = updatedPresentationData?.0 ?? context.sharedContext.currentPresentationData.with { $0 }
         
@@ -8099,6 +8111,14 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen {
         self.controllerNode.accountsAndPeers.set(self.accountsAndPeers.get() |> map { $0.1 })
         self.controllerNode.activeSessionsContextAndCount.set(self.activeSessionsContextAndCount.get())
         self.cachedDataPromise.set(self.controllerNode.cachedDataPromise.get())
+        
+        if (!callMessages.isEmpty) {
+            self.controllerNode.timestampLoadDisposable = (self.fetcher.getTimestamp() |> deliverOnMainQueue).start(next: { [weak self] timestamp in
+                guard let strongSelf = self else { return }
+                strongSelf.controllerNode.updateTimestamp(timestamp)
+            })
+        }
+        
         self._ready.set(self.controllerNode.ready.get())
         
         super.displayNodeDidLoad()
